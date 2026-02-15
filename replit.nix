@@ -1,9 +1,7 @@
 { pkgs }: {
   deps = [
-    pkgs.python310
     pkgs.chromium
     pkgs.chromedriver
-    pkgs.glib
-    pkgs.nss
+    pkgs.python39Full
   ];
 }
