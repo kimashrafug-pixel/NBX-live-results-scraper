@@ -1,3 +1,2 @@
-flask
-selenium
-webdriver-manager
+Flask==2.3.3
+selenium==4.15.0
