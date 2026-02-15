@@ -1,5 +1,6 @@
 import time
 import logging
+import threading
 from flask import Flask, render_template_string
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -7,11 +8,15 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-# Set up logging to see errors in Replit console
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# Global cache for results
+cached_results = []
+last_update = None
+cache_lock = threading.Lock()
 
 def get_driver():
     """Create and return a headless Chrome driver."""
@@ -19,54 +24,61 @@ def get_driver():
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
-    # Let Selenium find chromedriver in PATH (Replit's nix environment)
     return webdriver.Chrome(options=options)
 
 def fetch_pawa_results():
+    """Scrape results and return list of strings."""
     url = "https://www.betpawa.ug/virtual-sports?virtualTab=results"
     driver = None
     results = []
     try:
-        logger.info("Starting driver...")
+        logger.info("Starting driver for background update...")
         driver = get_driver()
-        logger.info(f"Fetching URL: {url}")
         driver.get(url)
-
-        # Wait for the results table to appear
-        logger.info("Waiting for results table...")
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.CLASS_NAME, "v-results-table"))
         )
-
-        # Find all result rows
         rows = driver.find_elements(By.CLASS_NAME, "v-result-row")
         logger.info(f"Found {len(rows)} rows")
-
-        # Process only the first 10 rows that contain "English"
         for row in rows[:10]:
             text = row.text
             if "English" in text:
                 results.append(text.replace('\n', ' '))
-
-        logger.info(f"Extracted {len(results)} results containing 'English'")
-
+        logger.info(f"Extracted {len(results)} results")
     except Exception as e:
-        error_msg = f"Scraper Error: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        results.append(error_msg)
+        logger.error(f"Scraper error: {e}", exc_info=True)
+        results.append(f"Scraper Error: {str(e)}")
     finally:
         if driver:
             driver.quit()
-            logger.info("Driver closed")
     return results
+
+def update_cache():
+    """Background task to update cached results."""
+    global cached_results, last_update
+    while True:
+        logger.info("Running background update...")
+        new_results = fetch_pawa_results()
+        with cache_lock:
+            cached_results = new_results
+            last_update = time.strftime('%H:%M:%S')
+        logger.info("Cache updated")
+        time.sleep(60)  # Update every 60 seconds
+
+# Start background thread
+thread = threading.Thread(target=update_cache, daemon=True)
+thread.start()
+# Give the first scrape a chance to complete before first request
+time.sleep(5)
 
 @app.route('/')
 def home():
-    matches = fetch_pawa_results()
-    current_time = time.strftime('%H:%M:%S')
+    with cache_lock:
+        matches = cached_results.copy() if cached_results else ["Loading results..."]
+        update_time = last_update if last_update else "Not yet updated"
+
     source_url = "https://www.betpawa.ug/virtual-sports?virtualTab=results"
 
-    # Minimal mobile-friendly HTML with a link to the source
     html = f"""
     <html>
     <head>
@@ -90,7 +102,7 @@ def home():
     </head>
     <body>
         <h1>NBX Live Results</h1>
-        <p>Last Updated: {current_time}</p>
+        <p>Last Updated: {update_time}</p>
         <a class="source-link" href="{source_url}" target="_blank" rel="noopener noreferrer">
             🔗 View on BetPawa
         </a>
